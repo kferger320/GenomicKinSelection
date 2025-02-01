@@ -10,3 +10,5 @@ This pipeline uses the following tools:
 7. RAxML v.8.2.12
 8. HYPHY v.2.5.61(MP)
 9. python-3.11.6
+
+Consult complete_pipeline.txt for a step-by-step guide to format and run data through hyphy RELAX, as described in Ferger & Tsutsui (2025).

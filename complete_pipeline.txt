@@ -1,0 +1,159 @@
+##The following steps represent the complete pipeline for data analysis seen in Ferger & Tsutsui (2025) (unpublished, manuscript in prep); github: https://github.com/kferger320/GenomicKinSelection
+
+WD=/global/scratch/users/kailey_ferger/genomic_sig_kin_selection/
+gene_set=["queen", "worker", "nde"]
+
+
+1. Download all reference genomes
+
+	a. download_ref_genomes.sh --> Step 1. download each reference genome using the 'datasets download' command (NCBI Datasets command-line tools (CLI)); unzip and move to single folder
+		*Requires input file with all GC accession numbers, full reference file names (eg. GCF_003651465.1_ASM365146v1_genomic.fna), 1 per line: GC_accessions.txt
+		-Outputs: {WD}ref_genomes/*.[fna/gff]
+
+
+2. Predict gene sequences in unannotated genomes with AUGUSTUS
+
+	pre-step: identify all unannotated reference genomes and move them to {WD}ref_genomes/unannotated/
+
+	a. augustus.sh --> Step 1. Run AUGUSTUS with threading using the 'run_augustus_parallel' command; run with run_parallel_by_ref.sh with each unannotated reference genome name as input 
+	(eg. {WD}ref_genomes/unannotated/GCF_003651465.1_ASM365146v1_genomic.fna)
+		-Outputs: {WD}ref_genomes/${ref_basename}/${ref_basename}.aug3.[aa/gff3/cdsexons/codingseq/mrna]
+
+
+3. Extract queen, worker, and NDE genes from Warner et al. database, get corresponding protein IDs and sequences:
+	
+	a. subset_caste_genes.sh -->  subsets External database S1 to genes with 'Worker/Reproductive/NDE' in 'Overall' column and extracts NCBI gene ID 
+		-Outputs: {WD}Warneretal2017_{gene_set}_genes.csv, {WD}Warneretal2017_{gene_set}_gene_IDs.txt
+	
+	b. fetch_Mpharaonis_caste_genes.sh --> Step 1. Extract protein IDs/cleaning steps using gene2accession.tsv
+		-Output: {WD}ordered_Warneretal2017_queen_protein_IDs.cleaned.txt; 6715 proteins total
+	
+	c. fetch_Mpharaonis_caste_genes.sh --> Step 2. Fetch protein sequences using Entrez tools and deposit into singular .faa file --> using webtool: http://www.ncbi.nlm.nih.gov/sites/batchentrez with ordered_Warneretal2017_{gene_set}_protein_IDs.cleaned.txt as input
+		-Outputs: Opens NCBI protein database results webpage: Send to: file: fasta/GFF3 (local download): Mpharaonis_{gene_set}_proteins.fasta/.gff
+
+	d. fetch_Mpharaonis_caste_genes.sh --> Step 3. Extract longest isoforms from protein fasta file
+		-Outputs: {WD}Mpharaonis_{gene_set}_proteins_longest_iso.fasta/.clstr
+
+	optional extra: fetch_Mpharaonis_caste_genes.sh --> Optional step: fetch {gene_set} gene sequences 
+		-Outputs:  Mpharaonis_{gene_set}_genes.fasta --> contains nt sequences for all genes in Warneretal2017_{gene_set}_gene_IDs.txt
+
+-(aside) all other references already downloaded, in {WD}ref_genomes/; blastdb already made, in {WD}blast/
+
+
+4. Blast worker/queen/nde proteins against every reference genome
+	-run blast_caste_genes.sh with run_parallel_by_ref.sh; uncomment ref_genomes or unannotated/ WD to loop through appropriate files; will submit one job per ref genome
+
+	a. blast_caste_genes.sh --> Step 1. Perform blast command against {gene_set} protein fasta using tblastn
+		-Outputs: {WD}blast_{gene_set}/${ref_basename}.blast
+	
+	b. blast_caste_genes.sh --> Step 2. Remove query isoforms and fix formatting issues 
+		-Outputs: {WD}blast_{gene_set}/${ref_basename}_longest_iso.uniq.blast
+	
+
+5. Extract longest isoforms and CDS's for each matched queen gene 
+	-run extract_cds.sh with run_parallel_by_ref.sh; uncomment ref_genomes or unannotated/ WD to loop through appropriate files; will submit one job per ref genome
+
+	a. extract_cds.sh --> Step 1. Extract the longest isoform gene IDs from each gff file --> ${WD}scripts/get_the_longest_transcripts.py
+
+	b. extract_cds.sh --> Step 2. Extract the transcripts and CDS's from each longest isoform
+		-Output: ${WD}ref_genomes/${ref_basename}_longest_iso_cds.tmp / ${WD}ref_genomes/unannotated/${ref_basename}_longest_iso_transcript.bed
+	
+	c. extract_cds.sh --> Step 3. Intersect extracted transcripts with those only occurring in (blasted) genes, extract corresponding CDS seqs
+		-Output: ${WD}ref_genomes/${ref_basename}_${gene_set}_longest_iso_cds.bed
+	
+	d. extract_cds.sh --> Step 4. Extract nt sequences of matching queen CDS's
+		-Output: ${WD}queen_gene_seqs/${ref_basename}_longest_iso_cds.queen_genes.fna | ${WD}queen_gene_seqs/${ref_basename}_longest_iso_cds.aug3.queen_genes.fna
+	
+
+6. Convert CDS queen sequences to appropriate reading frames, translate, concatenate cds's to gene-level, and output concatenated nt and translated prot seqs
+	-run with run_parallel_by_ref.sh; uncomment ref_genomes or unannotated/ WD to loop through appropriate files; will submit one job per ref genome
+	
+	a. pre-msa-kf.sh --> pre-msa-kf.py --> Step 1. translate input nt seqs from worker_genes, concatenate and output .faa (translated seqs) and .fna (corresponding nt seqs, divisible by 3, frame taken into account)
+		*Relies on genes being in *sorted order* in ${WD}${gene_set}_gene_seqs/${ref_basename}_longest_iso_cds*.${gene_set}_genes.fna*
+		-Outputs: queen_gene_seqs/pre-msa/{basename}.nuc_prot.fna and {basename}.nuc_prot.faa
+
+
+7. Generate consensus M.pharaonis protein set (of queen gene blast hits)
+
+	a. get_consensus_gene_set.sh --> get_consensus_set.py --> Step 1. Get matched gene names with corresponding M.pharaonis protein names, output matches to new file
+		-Outputs: ${WD}{gene_set}_gene_seqs/${ref_basename}_Mphar_prot_matches.txt
+	
+	b. get_consensus_gene_set_pt2.sh --> get_consensus_set_pt2.py --> Step 2. Use all ref gene sets created in a) to create final consensus M.pharaonis protein set that has hits in every ref file
+	*run ONLY ONCE (not per-reference)
+		-Output: ${WD}MSA_{gene_set}/consensus_Mphar_prot_set.txt
+
+	c. get_consensus_gene_set.sh --> Step 3. Extract all nt sequences per ref and per consensus M.phar protein
+		-Outputs: ${WD}MSA_{gene_set}/${WD}${MSA_DIR}/${ref_basename}_${ID}.faa.tmp/${ref_basename}_${ID}.tmp
+
+	d. longest.py --> Step 4. Extract the longest isoform for each Mphar protein and each reference- outputs have only 1 seq per protein per ref
+		-Outputs: ${WD}MSA_{gene_set}/${WD}${MSA_DIR}/${ref_basename}_${ID}.faa.tmp/${ref_basename}_${ID}.tmp (overwrite previous files)
+	
+	e. get_consensus_gene_set.sh --> Step 5. Concatenate all nt and aa seqs for each protein to create 1 file per M.phar protein
+		*Run only once; not per-reference 
+		-Outputs: ${WD}MSA_{gene_set}/proteins_all_taxa/${ID}.fna/.faa
+
+
+8. Run pre-msa, alignment, and post-msa steps
+
+	a. msa.sh --> Step 1. Run pre-msa.bf on concatenated prot files to prep for msa
+		-Outputs: ${WD}MSA_{gene_set}/proteins_all_taxa/${ID}*fna_nuc.fas and *fna_protein.fas
+	
+	b. msa.sh --> Step 2. Perform multiple sequence alignment on each protein output generated above 
+		-Outputs: ${WD}MSA_{gene_set}/proteins_all_taxa/aligned/${ID}.fna_protein.mafft.fas
+	
+	c. msa.sh --> Step 3. obtain a final nucleotide msa using frameshift corrected nucleotide sequences from step 1
+		-Outputs: ${WD}MSA_{gene_set}/proteins_all_taxa/aligned/${ID}.nuc.final.fas
+	
+	d. msa.sh --> Step 4. Count number of sequences per ${ID}.nuc.final.fas file and output seq headers	
+		-Outputs: ${WD}MSA_{gene_set}/proteins_all_taxa/aligned/seqcount.txt and ${WD}MSA_{gene_set}/proteins_all_taxa/aligned/${ID}.seqheaders.txt
+
+
+9. Filter low-aligning seqs, fill sequence gaps to generate inputs for RAxML and relax
+
+	a. filter_low_align.sh --> Step 1. Find protein .nuc_final.fas files with <60 sequences aligned (could not align in pre-msa.bf step)
+		-Output: {WD}${MSA_DIR}/proteins_all_taxa/aligned/low_align_seqs.txt and final_prot_set.txt (all prot not in low_align_seqs.txt)
+	
+	b. filter_low_align.sh --> Step 2. Move corresponding files to low_align folder, don't include them in rest of analysis 
+	
+**Old steps, do not run unless concatenating sequences into a single alignment for input into RAxML/RELAX
+	c. new_master_ref_list.py --> Step 3. fill out .fas files to adjust for gene duplicates if necessary
+		-Outputs: MSA/proteins_all_taxa/aligned/nuc_aligned/*nuc.final.consensus.fas
+	
+	d. sort_seqs.sh --> Step 4. Sort all final prot files by ID to ensure identical order for later concatenation 
+	
+	e. concat_alignments.py --> Step 5. Concatenate all (filled) alignments together to create a single alignment file
+		-Outputs: MSA/proteins_all_taxa/aligned/nuc_aligned/all_seqs.nuc.final.consensus.fas
+***
+
+
+10. Generate phylogenetic tree with RAxML, label branches for relax
+
+**optional parallelization pre-step
+	pre-step: split_prot_fas.py --> generate xx files containing subsets of input gene fasta files in nuc_aligned/* for parallelization
+		-Run like: python split_prot_fas.py [gene_set] [files_per_group]
+		-Outputs: {MSA_DIR}/proteins_all_taxa/aligned/nuc_aligned/${gene_set}_gene_set_${i}.txt
+
+	a. RAxML.sh --> Step 1. Generate 1 tree for each input; run with run_raxml_groups.sh
+		-Outputs: RAxML_sbatch_dir/{gene_set}_genes/RAxML_[bestTree/bipartitionsBranchLabels/bipartitions/info].{prot}.nuc.final.consensus.nodummy.fas
+
+	b. label_raxml_branch_tips_base_genes.py --> Step 2. label output trees with 'Test' or 'Reference' according to test bin for relax run; run with run_raxml_groups.sh
+		*Requires file of references per Test bin as input, listed as GC accession numbers; eg. {WD}monogyne_GC_refs_redo.txt
+		-Run like: python label_raxml_branch_tips_base_genes.py [test_bin] [gene_set] [group_file]
+		-Outputs: RAxML_sbatch_dir/{gene_set}_genes/labeled/RAxML_bestTree.{prot}-{gene_set}-{test_bin}
+
+
+11. Run RELAX
+
+	a. relax_per_gene.sh --> Step 1: run relax with 1CPU for each gene; parallelized with ${gene_set}_gene_set_${i}.txt (~30 genes/file, looping through)
+	*run with {WD}run_relax_allbins.sh [conv_probs=[True/False]] --> if doing separate processing for input files that experienced convergence problems, set conv_probs=True and change group input files accordingly
+	**if running the General descriptive model, change --models from 'Minimal' to 'All'
+	***Run separately for worker, queen, and nde gene sets, and for high_poly, polygyne, and social poly test bins
+	**** --starting-points 5 and --grid-size 500 are to deal with potential convergence issues, see https://github.com/veg/hyphy/issues/1685
+		-Outputs: nuc_aligned/relax-srv/RELAX-${SLURM_JOB_ID}-${prot}-${gene_set}-${test_bin} ; log files: nuc_aligned/relax-srv/log/*
+
+
+12. Post-processing and multiple testing correction
+
+	*Per-gene pipeline
+	a.  {WD}scripts/process_relax_results.py --> Scrape results files and output summaries for all gene_bin files; run with run_process_relax_results.sh
+		-Outputs: RELAX-srv_{gene_set}_{gene_bin}-rerun-gen_desc-results-allgenes.txt and RELAX-srv_{gene_set}_{gene_bin}_results_allgenes.txt

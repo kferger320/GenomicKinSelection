@@ -11,4 +11,6 @@ This pipeline uses the following tools:
 8. HYPHY v.2.5.61(MP)
 9. python-3.11.6
 
+If you use any of these tools in this pipeline, please cite the appropriate sources.
+
 Consult complete_pipeline.txt for a step-by-step guide to format and run data through hyphy RELAX, as described in Ferger & Tsutsui (2025).
